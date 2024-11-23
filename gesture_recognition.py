@@ -26,8 +26,10 @@ class HandGestureRecognizer:
         )
         
         self.gestures = {
-            "PEACE": (0, 255, 128)
+            "PEACE": (0, 255, 128),
+            "OK": (255, 128, 0)
         }
+
 
     def get_finger_state(self, landmarks):
         fingers = []
@@ -42,6 +44,9 @@ class HandGestureRecognizer:
         
         return fingers
     
+    def calculate_distance(self, point1, point2):
+        return math.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
+
     def recognize_gesture(self, finger_states, landmarks):
         index_up = finger_states[1]
         middle_up = finger_states[2]
@@ -58,7 +63,15 @@ class HandGestureRecognizer:
             if index_raised and middle_raised:
                 return "PEACE", self.gestures["PEACE"]
         
+        thumb_tip = landmarks[4]
+        index_tip = landmarks[8]
+        distance = self.calculate_distance(thumb_tip, index_tip)
+        
+        if distance < 0.1:
+            return "OK", self.gestures["OK"]
+        
         return "No gesture", (255, 255, 255)
+
 
     def process_frame(self, frame):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
