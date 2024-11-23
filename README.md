@@ -64,13 +64,10 @@ The application will launch in fullscreen mode. Use the following controls:
 - [ ] Configuration UI
 - [ ] Gesture sequence detection
 
-## Contributing
-
-Contributions are welcome! Check [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
-MIT
+This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) file in the root directory of this repository for detailed terms and conditions.
 
 ---
 *Built with OpenCV and MediaPipe*
