@@ -42,7 +42,8 @@ class HandGestureRecognizer:
         self.gestures = {
             "PEACE": (0, 255, 128),
             "OK": (255, 128, 0),
-            "SONRISA": (255, 255, 0)
+            "SONRISA": (255, 255, 0),
+            "NO SE": (255, 0, 0),
         }
         
         self.smile_threshold = 0.25
@@ -120,6 +121,7 @@ class HandGestureRecognizer:
     def process_frame(self, frame):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
+        pose_results = self.pose.process(rgb_frame)
         hand_results = self.hands.process(rgb_frame)
         face_results = self.face_mesh.process(rgb_frame)
         
@@ -139,6 +141,20 @@ class HandGestureRecognizer:
             smile_gesture = self.detect_smile(face_landmarks)
             if smile_gesture:
                 detected_gesture = smile_gesture
+        
+        if pose_results.pose_landmarks:
+            shoulders = [
+                pose_results.pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER],
+                pose_results.pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER]
+            ]
+            
+            for shoulder in shoulders:
+                x = int(shoulder.x * frame.shape[1])
+                y = int(shoulder.y * frame.shape[0])
+                cv2.circle(frame, (x, y), 3, (0, 255, 0), -1)
+            
+            if self.detect_shrug(pose_results.pose_landmarks):
+                detected_gesture = "NO SE"
 
         if hand_results.multi_hand_landmarks:
             for hand_landmarks in hand_results.multi_hand_landmarks:
@@ -212,6 +228,26 @@ class HandGestureRecognizer:
                 
             frame = cv2.flip(frame, 1)
             processed_frame = self.process_frame(frame)
+            
+            height = frame.shape[0]
+            info_text = "Gestos disponibles:"
+            cv2.putText(processed_frame, info_text, 
+                    (10, height - 90), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 
+                    0.6, (255, 255, 255), 2)
+            
+            gestures_info = [
+                "PEACE: Dedos índice y medio levantados",
+                "OK: Pulgar e índice formando círculo",
+                "NO SE: Encogimiento de hombros",
+                "SONRISA: Sonrisa amplia detectada"
+            ]
+            
+            for i, text in enumerate(gestures_info):
+                cv2.putText(processed_frame, text, 
+                           (20, height - 60 + (i * 20)), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 
+                           0.5, (200, 200, 200), 1)
             
             cv2.imshow('Gesture Recognition', processed_frame)
             
