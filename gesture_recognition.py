@@ -2,6 +2,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import math
+import time
 from collections import deque
 
 class HandGestureRecognizer:
@@ -57,9 +58,10 @@ class HandGestureRecognizer:
             "PEACE": (0, 255, 128),
             "OK": (255, 128, 0),
             "U": (0, 255, 255),
-            "NO SE": (255, 0, 0),
-            "SONRISA": (255, 255, 0),
-            "PENSANDO": (191, 255, 0)
+            "IDK": (255, 0, 0),
+            "SMILE": (255, 255, 0),
+            "THINKING": (191, 255, 0),
+            "GROOVE": (147, 20, 255)
         }
         
         self.shoulder_heights = deque(maxlen=10)
@@ -76,7 +78,13 @@ class HandGestureRecognizer:
         self.eyebrow_raise_threshold = 0.01
         
         self.eyebrow_positions = deque(maxlen=5)
-
+        
+        self.head_positions = deque(maxlen=5)
+        self.last_direction = None
+        self.direction_changes = 0
+        self.last_detection_time = 0
+        self.groove_cooldown = 0
+            
     def get_finger_state(self, landmarks):
         fingers = []
         thumb_tip = landmarks[4]
@@ -115,31 +123,70 @@ class HandGestureRecognizer:
         smile_ratio = mouth_width / (mouth_height + 1e-6)
         
         if smile_ratio > self.smile_threshold and mouth_height > self.mouth_height_threshold:
-            return "SONRISA"
+            return "SMILE"
             
         return None
     
+    def detect_head_movement(self, face_landmarks):
+        if not face_landmarks:
+            return False
+            
+        nose_tip = face_landmarks.landmark[1]
+        current_pos = (nose_tip.x, nose_tip.y)
+        
+        if not hasattr(self, 'head_positions'):
+            self.head_positions = deque(maxlen=5)
+            self.last_direction = None
+            self.direction_changes = 0
+            self.last_detection_time = 0
+        
+        self.head_positions.append(current_pos)
+        
+        if len(self.head_positions) < 3:
+            return False
+        
+        current_direction = None
+        total_movement = 0
+        
+        for i in range(len(self.head_positions) - 1):
+            dx = self.head_positions[i+1][0] - self.head_positions[i][0]
+            dy = self.head_positions[i+1][1] - self.head_positions[i][1]
+            
+            movement = abs(dx) * 1.5 + abs(dy) * 0.5
+            total_movement += movement
+            
+            if abs(dx) > 0.005:
+                current_direction = 1 if dx > 0 else -1
+        
+        if (self.last_direction is not None and 
+            current_direction is not None and 
+            current_direction != self.last_direction):
+            self.direction_changes += 1
+            
+        self.last_direction = current_direction
+        
+        current_time = cv2.getTickCount() / cv2.getTickFrequency()
+        time_since_last = current_time - self.last_detection_time
+        
+        if (total_movement > 0.02 and
+            self.direction_changes >= 1 and
+            time_since_last > 0.5):
+            
+            self.last_detection_time = current_time
+            self.direction_changes = 0
+            return True
+            
+        if total_movement < 0.01:
+            self.direction_changes = 0
+            
+        return False
+
     def detect_reflection_gesture(self, face_landmarks, hand_landmarks):
         if not face_landmarks or not hand_landmarks:
             return False
-            
+                
         chin = face_landmarks.landmark[152]
-        
-        left_eyebrow_points = [face_landmarks.landmark[i] for i in [70, 46, 53, 52, 65]]
-        right_eyebrow_points = [face_landmarks.landmark[i] for i in [300, 276, 283, 282, 295]]
-        
-        left_eye_top = face_landmarks.landmark[159].y
-        right_eye_top = face_landmarks.landmark[386].y
-        neutral_position = (left_eye_top + right_eye_top) / 2
-        
-        left_eyebrow_y = sum(point.y for point in left_eyebrow_points) / len(left_eyebrow_points)
-        right_eyebrow_y = sum(point.y for point in right_eyebrow_points) / len(right_eyebrow_points)
-        current_eyebrow_y = (left_eyebrow_y + right_eyebrow_y) / 2
-        
-        eyebrow_displacement = neutral_position - current_eyebrow_y
-        
-        self.eyebrow_positions.append(current_eyebrow_y)
-        
+
         hand_chin_distances = [
             self.calculate_distance(
                 (hand_landmark.x, hand_landmark.y),
@@ -148,28 +195,9 @@ class HandGestureRecognizer:
             for hand_landmark in hand_landmarks.landmark
         ]
         min_hand_chin_distance = min(hand_chin_distances)
-        
-        if len(self.eyebrow_positions) >= 2:
-            eyebrow_movement = self.eyebrow_positions[-1] - self.eyebrow_positions[0]
-            
-            eyebrows_raised = (
-                eyebrow_movement < -self.eyebrow_raise_threshold * 0.5 or
-                eyebrow_displacement > self.eyebrow_raise_threshold * 2
-            )
-            
-            hand_near_chin = min_hand_chin_distance < self.chin_distance_threshold * 1.8
-            
-            if eyebrows_raised and hand_near_chin:
-                return True
-            elif not hand_near_chin:
-                return False
-            else:
-                return (
-                    eyebrow_displacement > 0 or
-                    abs(eyebrow_movement) > self.eyebrow_raise_threshold * 0.3
-                )
-        
-        return False
+
+        self.hand_in_thinking_position = min_hand_chin_distance < self.chin_distance_threshold
+        return self.hand_in_thinking_position
     
     def process_frame(self, frame):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -177,17 +205,18 @@ class HandGestureRecognizer:
         pose_results = self.pose.process(rgb_frame)
         hand_results = self.hands.process(rgb_frame)
         face_results = self.face_mesh.process(rgb_frame)
-        
-        detected_gesture = None
-        
+
+        detected_gestures = []
+
         if face_results.multi_face_landmarks:
             face_landmarks = face_results.multi_face_landmarks[0]
-            
+
             key_face_points = [
                 61, 291, 13, 14, 33, 133, 362, 263,
                 152,
                 107, 336,
-                71, 301
+                71, 301,
+                4
             ]
             
             for idx in key_face_points:
@@ -195,15 +224,23 @@ class HandGestureRecognizer:
                 x = int(point.x * frame.shape[1])
                 y = int(point.y * frame.shape[0])
                 cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
-            
+
+            if self.detect_head_movement(face_landmarks):
+                self.groove_cooldown = 5
+                detected_gestures.append(("GROOVE", self.gestures["GROOVE"]))
+            elif self.groove_cooldown > 0:
+                self.groove_cooldown -= 1
+                if self.groove_cooldown > 0:
+                    detected_gestures.append(("GROOVE", self.gestures["GROOVE"]))
+
             smile_gesture = self.detect_smile(face_landmarks)
             if smile_gesture:
-                detected_gesture = smile_gesture
+                detected_gestures.append((smile_gesture, self.gestures[smile_gesture]))
             
             if hand_results.multi_hand_landmarks:
                 if self.detect_reflection_gesture(face_landmarks, hand_results.multi_hand_landmarks[0]):
-                    detected_gesture = "PENSANDO"
-        
+                    detected_gestures.append(("THINKING", self.gestures["THINKING"]))
+
         if pose_results.pose_landmarks:
             shoulders = [
                 pose_results.pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER],
@@ -216,58 +253,54 @@ class HandGestureRecognizer:
                 cv2.circle(frame, (x, y), 3, (0, 255, 0), -1)
             
             if self.detect_shrug(pose_results.pose_landmarks):
-                detected_gesture = "NO SE"
-        
+                detected_gestures.append(("IDK", self.gestures["IDK"]))
+
         if hand_results.multi_hand_landmarks:
             for hand_landmarks in hand_results.multi_hand_landmarks:
                 self.mp_draw.draw_landmarks(
                     frame,
                     hand_landmarks,
                     self.mp_hands.HAND_CONNECTIONS,
-                    landmark_drawing_spec=self.hand_drawing_spec,
-                    connection_drawing_spec=self.connection_drawing_spec
+                    self.hand_drawing_spec,
+                    self.connection_drawing_spec
                 )
                 
                 landmarks = [[lm.x, lm.y] for lm in hand_landmarks.landmark]
                 finger_states = self.get_finger_state(landmarks)
-                hand_gesture, _ = self.recognize_gesture(finger_states, landmarks)
+                hand_gesture, color = self.recognize_gesture(finger_states, landmarks)
                 if hand_gesture != "No gesture":
-                    detected_gesture = hand_gesture
-        
-        if detected_gesture:
-            frame = self.create_gesture_overlay(frame, detected_gesture, self.gestures[detected_gesture])
-        
+                    detected_gestures.append((hand_gesture, color))
+
+        if detected_gestures:
+            detected_gestures.sort(key=lambda x: x[0])
+            for i, (gesture, color) in enumerate(detected_gestures[:2]):
+                frame = self.create_gesture_overlay(frame, gesture, color, i)
+
         return frame
     
     def recognize_gesture(self, finger_states, landmarks):
-        thumb_up = finger_states[0]
-        index_up = finger_states[1]
-        middle_up = finger_states[2]
-        ring_up = finger_states[3]
-        pinky_up = finger_states[4]
-        
-        index_tip = landmarks[8][1]
-        index_base = landmarks[5][1]
-        middle_tip = landmarks[12][1]
-        middle_base = landmarks[9][1]
-        
-        if index_up and middle_up:
-            index_raised = (index_base - index_tip) > 0.1
-            middle_raised = (middle_base - middle_tip) > 0.1
-            
-            if index_raised and middle_raised:
-                return "PEACE", self.gestures["PEACE"]
-        
         thumb_tip = landmarks[4]
         index_tip = landmarks[8]
-        distance = self.calculate_distance(thumb_tip, index_tip)
+        distance = math.sqrt((thumb_tip[0] - index_tip[0])**2 + (thumb_tip[1] - index_tip[1])**2)
+        
+        if hasattr(self, 'hand_in_thinking_position') and self.hand_in_thinking_position:
+            return "No gesture", (255, 255, 255)
         
         if distance < 0.1:
-            return "OK", self.gestures["OK"]
+            middle_tip = landmarks[12][1]
+            ring_tip = landmarks[16][1]
+            pinky_tip = landmarks[20][1]
+            wrist = landmarks[0][1]
+            
+            if (middle_tip < wrist and ring_tip < wrist and pinky_tip < wrist):
+                return "OK", self.gestures["OK"]
         
+        if finger_states[1] and finger_states[2] and not finger_states[3] and not finger_states[4]:
+            return "PEACE", self.gestures["PEACE"]
+            
         return "No gesture", (255, 255, 255)
 
-    def create_gesture_overlay(self, frame, gesture, color):
+    def create_gesture_overlay(self, frame, gesture, color, position=0):
         overlay = frame.copy()
         padding = 20
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -278,23 +311,25 @@ class HandGestureRecognizer:
         (text_width, text_height), _ = cv2.getTextSize(text, font, font_scale, font_thickness)
         rect_width = text_width + (padding * 2)
         rect_height = text_height + (padding * 2)
+
+        y_offset = position * (rect_height + 10)
         
         cv2.rectangle(overlay, 
-                    (10, 10), 
-                    (10 + rect_width, 10 + rect_height), 
+                    (10, 10 + y_offset), 
+                    (10 + rect_width, 10 + rect_height + y_offset), 
                     (0, 0, 0), 
                     -1)
         
         cv2.rectangle(overlay, 
-                    (10, 10), 
-                    (10 + rect_width, 10 + rect_height), 
+                    (10, 10 + y_offset), 
+                    (10 + rect_width, 10 + rect_height + y_offset), 
                     color, 
                     3)
         
         cv2.putText(
             overlay,
             text,
-            (10 + padding, 10 + text_height + (padding // 2)),
+            (10 + padding, 10 + text_height + (padding // 2) + y_offset),
             font,
             font_scale,
             color,
@@ -360,18 +395,19 @@ class HandGestureRecognizer:
             processed_frame = self.process_frame(frame)
             
             height, width = frame.shape[:2]
-            info_text = "Gestos disponibles:"
+            info_text = "Available Gestures:"
             cv2.putText(processed_frame, info_text, 
                     (10, height - 120), 
                     cv2.FONT_HERSHEY_SIMPLEX, 
                     0.6, (255, 255, 255), 2)
             
             gestures_info = [
-                "THINKING: Cejas levantadas + Mano en mentón",
-                "PEACE: Dedos índice y medio levantados",
-                "OK: Pulgar e índice formando círculo",
-                "NO SE: Encogimiento de hombros",
-                "SONRISA: Sonrisa amplia detectada"
+                "THINKING: Raised eyebrows + Hand on chin",
+                "PEACE: Index and middle fingers raised",
+                "OK: Thumb and index forming circle",
+                "IDK: Shoulder shrug",
+                "SMILE: Wide smile detected",
+                "GROOVE: Move head to the rhythm"
             ]
             
             for i, text in enumerate(gestures_info):
@@ -383,10 +419,10 @@ class HandGestureRecognizer:
             if len(self.eyebrow_positions) >= 2:
                 eyebrow_movement = self.eyebrow_positions[-1] - self.eyebrow_positions[0]
                 if eyebrow_movement < -self.eyebrow_raise_threshold:
-                    cv2.putText(processed_frame, "Cejas Levantadas", 
-                              (width - 200, 30), 
-                              cv2.FONT_HERSHEY_SIMPLEX, 
-                              0.6, (0, 255, 0), 2)
+                    cv2.putText(processed_frame, "Eyebrows Raised",
+                            (width - 200, 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 
+                            0.6, (0, 255, 0), 2)
             
             cv2.imshow('Gesture Recognition', processed_frame)
             
@@ -395,6 +431,8 @@ class HandGestureRecognizer:
                 break
             elif key == ord('r'):
                 self.eyebrow_positions.clear()
+                self.head_positions.clear()
+                self.groove_counter = 0
                 
         cap.release()
         cv2.destroyAllWindows()
