@@ -121,6 +121,14 @@ The application will launch in fullscreen mode. Use the following controls:
 - Weighted movement analysis
 - Gesture cooldown system
 
+### Key Notes
+This project showcases computer vision and gesture recognition techniques. The gestures were chosen for their detection reliability and technical suitability, without intent to define or standardize their meanings, acknowledging cultural variations.
+
+#### Intended Use
+- Research and academic purposes
+- Technical demonstrations
+- Computer vision development
+
 #### License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) file in the root directory of this repository for detailed terms and conditions.
 
