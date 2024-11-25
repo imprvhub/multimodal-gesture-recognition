@@ -129,6 +129,19 @@ This project showcases computer vision and gesture recognition techniques. The g
 - Technical demonstrations
 - Computer vision development
 
+### Testing
+The project includes a comprehensive test suite using pytest. Tests cover gesture recognition accuracy, system robustness, and performance metrics.
+
+```bash
+# Install development dependencies
+pip install -r requirements-dev.txt
+
+# Run tests
+pytest-v
+```
+
+For detailed test coverage: `pytest --cov=gesture_recognition`
+
 #### License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) file in the root directory of this repository for detailed terms and conditions.
 
